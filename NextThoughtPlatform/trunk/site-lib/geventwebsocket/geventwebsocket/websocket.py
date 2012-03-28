@@ -13,6 +13,7 @@ class AbstractWebSocket(object):
 		self.protocol = environ.get('HTTP_SEC_WEBSOCKET_PROTOCOL', 'unknown')
 		self.path = environ.get('PATH_INFO')
 		self.websocket_closed = False
+		self.websocket_written_on = False
 
 	def send(self, message):
 		raise NotImplementedError()
@@ -110,6 +111,7 @@ class WebSocket76(AbstractWebSocket):
 		else:
 			raise Exception("Invalid message encoding")
 
+		self.websocket_written_on = True
 		self.socket.sendall("\x00" + message + "\xFF")
 
 
@@ -204,6 +206,7 @@ class WebSocket7(AbstractWebSocket):
 			self.socket.send( struct.pack( 'B', i ) )
 		for i in masking_key: self.socket.send( struct.pack( 'B', i ) )
 
+		self.websocket_written_on = True
 		self.socket.sendall( message )
 
 	def wait(self):

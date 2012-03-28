@@ -1,6 +1,8 @@
+#!/usr/bin/env python
 import re
 import struct
 from hashlib import md5, sha1
+import time
 
 from gevent.pywsgi import WSGIHandler
 import geventwebsocket as ws
@@ -38,8 +40,10 @@ class WebSocketHandler(WSGIHandler):
 			or self.environ.get("HTTP_UPGRADE", '').lower() != "WebSocket".lower()
 			or not self.accept_upgrade()):
 			return super(WebSocketHandler, self).handle_one_response()
-		else:
-			self.websocket_connection = True
+
+		self.time_start = time.time()
+		self.websocket_connection = True
+		self.headers_sent = False
 
 		# Detect the Websocket protocol
 		if 'HTTP_SEC_WEBSOCKET_VERSION' in self.environ:
@@ -51,6 +55,10 @@ class WebSocketHandler(WSGIHandler):
 
 		self.websocket = ws.__dict__['WebSocket' + str(version)](self.socket, self.rfile, self.environ)
 		self.environ['wsgi.websocket'] = self.websocket
+
+		protocol = "ws://"
+		if self.environ.get( 'HTTP_X_FORWARDED_PROTOCOL', None ) == 'ssl' or self.environ.get( 'SERVER_PORT' ) == 443:
+			protocol = "wss://"
 
 		if version in (7,8,13):
 			sec_accept = self.environ['HTTP_SEC_WEBSOCKET_KEY'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
@@ -67,7 +75,7 @@ class WebSocketHandler(WSGIHandler):
 				("Connection", "Upgrade"),
 				("WebSocket-Origin", self.websocket.origin),
 				("WebSocket-Protocol", self.websocket.protocol),
-				("WebSocket-Location", "ws://" + self.environ.get('HTTP_HOST') + self.websocket.path),
+				("WebSocket-Location", protocol + self.environ.get('HTTP_HOST') + self.websocket.path),
 			]
 			self.start_response("101 Web Socket Protocol Handshake", headers)
 		elif version == 76:
@@ -77,7 +85,7 @@ class WebSocketHandler(WSGIHandler):
 				("Connection", "Upgrade"),
 				("Sec-WebSocket-Origin", self.websocket.origin),
 				("Sec-WebSocket-Protocol", self.websocket.protocol),
-				("Sec-WebSocket-Location", "ws://" + self.environ.get('HTTP_HOST') + self.websocket.path),
+				("Sec-WebSocket-Location", protocol + self.environ.get('HTTP_HOST') + self.websocket.path),
 			]
 
 			self.start_response("101 Web Socket Protocol Handshake", headers)
@@ -86,7 +94,23 @@ class WebSocketHandler(WSGIHandler):
 			raise Exception("Version not supported: %s" % version)
 
 		if call_wsgi_app:
-			return self.application(self.environ, self.start_response)
+			def start_response(status, headers, exc_info=None):
+				if exc_info:
+					try:
+						raise exc_info[0], exc_info[1], exc_info[2]
+					finally:
+						# Avoid dangling circular ref
+						exc_info = None
+				self.code = int(status.split(' ', 1)[0])
+				self.status = status
+				self.response_headers = [('-'.join([x.capitalize() for x in key.split('-')]), value) for key, value in headers]
+				self.response_headers_list = [x[0] for x in self.response_headers]
+				return None
+			try:
+				self.application(self.environ, start_response)
+			finally:
+				self.time_finish = time.time()
+				self.log_request()
 
 		return
 
@@ -112,7 +136,7 @@ class WebSocketHandler(WSGIHandler):
 			super(WebSocketHandler, self).write(data)
 
 	def start_response(self, status, headers, exc_info=None):
-		if self.websocket_connection:
+		if self.websocket_connection and not self.headers_sent:
 			self.status = status
 
 			towrite = []
@@ -125,8 +149,9 @@ class WebSocketHandler(WSGIHandler):
 			msg = ''.join(towrite)
 			self.socket.sendall(msg)
 			self.headers_sent = True
-		else:
-			super(WebSocketHandler, self).start_response(status, headers, exc_info)
+			return self.write
+
+		return super(WebSocketHandler, self).start_response(status, headers, exc_info)
 
 	def _get_key_value(self, key_value):
 		key_number = int(re.sub("\\D", "", key_value))
