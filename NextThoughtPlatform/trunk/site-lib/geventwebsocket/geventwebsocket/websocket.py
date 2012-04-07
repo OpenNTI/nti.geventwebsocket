@@ -1,10 +1,9 @@
+#!/usr/bin/env python
+
 import struct
 
-from errno import EINTR
-from gevent.coros import Semaphore
-
-from python_fixes import makefile, is_closed
-from exceptions import FrameTooLargeException, WebSocketError
+from geventwebsocket.python_fixes import makefile, is_closed
+from geventwebsocket.exceptions import FrameTooLargeException, WebSocketError
 
 from zope.deprecation import deprecate
 
@@ -26,14 +25,12 @@ class WebSocketHixie(WebSocket):
 		self.protocol = environ.get('HTTP_SEC_WEBSOCKET_PROTOCOL')
 		self.path = environ.get('PATH_INFO')
 		self.fobj = socket.makefile()
-		self._writelock = Semaphore(1)
 		self._write = socket.sendall
 
 	def send(self, message):
 		message = self._encode_text(message)
 
-		with self._writelock:
-			self._write("\x00" + message + "\xFF")
+		self._write("\x00" + message + "\xFF")
 
 	def close(self):
 		if self.fobj is not None:
@@ -94,6 +91,13 @@ class WebSocketHixie(WebSocket):
 			if frame_type == 0x00:
 				bytes = self._read_until()
 				return bytes.decode("utf-8", "replace")
+			elif frame_type == 0xFF: # Client-initiated close
+				try:
+					self._write( '\0xFF\x00' )
+				except IOError:
+					pass
+				self.close()
+				return None
 			else:
 				raise WebSocketError("Received an invalid frame_type=%r" % frame_type)
 
@@ -110,7 +114,6 @@ class WebSocketHybi(WebSocket):
 		self.protocol = environ.get('HTTP_SEC_WEBSOCKET_PROTOCOL', 'unknown')
 		self.path = environ.get('PATH_INFO')
 		self._chunks = bytearray()
-		self._writelock = Semaphore(1)
 		self.socket = socket
 		self._write = socket.sendall
 		self.fobj = makefile(socket)
@@ -337,12 +340,10 @@ class WebSocketHybi(WebSocket):
 		try:
 			combined = header + message
 		except TypeError:
-			with self._writelock:
-				self._write(header)
-				self._write(message)
+			self._write(header)
+			self._write(message)
 		else:
-			with self._writelock:
-				self._write(combined)
+			self._write(combined)
 
 	def send(self, message, binary=None):
 		"""Send a frame over the websocket with message as its payload"""
