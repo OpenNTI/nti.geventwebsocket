@@ -1,9 +1,7 @@
+version_info = (0, 3, 1)
+__version__ = ".".join(map(str, version_info))
 
-version_info = (0, 2, 3, 'nti')
-__version__ =  ".".join(map(str, version_info))
+__all__ = ['WebSocketHandler', 'WebSocketError']
 
-try:
-    from geventwebsocket.websocket import *
-except ImportError:
-    import traceback
-    traceback.print_exc()
+from geventwebsocket.handler import WebSocketHandler
+from geventwebsocket.websocket import WebSocketError

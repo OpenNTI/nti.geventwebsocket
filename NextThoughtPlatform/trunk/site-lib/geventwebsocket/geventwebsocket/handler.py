@@ -1,195 +1,244 @@
-#!/usr/bin/env python
+import base64
 import re
 import struct
 from hashlib import md5, sha1
-import time
+from socket import error as socket_error
+from urllib import quote
 
 from gevent.pywsgi import WSGIHandler
-import geventwebsocket as ws
-
-
-
-class HandShakeError(ValueError):
-	""" Hand shake challenge can't be parsed """
-	pass
+from geventwebsocket.websocket import WebSocketHybi, WebSocketHixie
 
 
 class WebSocketHandler(WSGIHandler):
 	""" Automatically upgrades the connection to websockets. """
-	def __init__(self, *args, **kwargs):
-		self.websocket_connection = False
-		self.allowed_paths = []
 
-		for expression in kwargs.pop('allowed_paths', []):
-			if isinstance(expression, basestring):
-				self.allowed_paths.append(re.compile(expression))
-			else:
-				self.allowed_paths.append(expression)
+	GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+	SUPPORTED_VERSIONS = ('13', '8', '7')
 
-		super(WebSocketHandler, self).__init__(*args, **kwargs)
+	def handle_one_response(self):
+		self.pre_start()
+		environ = self.environ
+		upgrade = environ.get('HTTP_UPGRADE', '').lower()
 
-	def handle_one_response(self, call_wsgi_app=True):
-		"""
-		If this is a websocket upgrade, places `wsgi.websocket` in the :attr:`environ` dict.
+		if upgrade == 'websocket':
+			connection = environ.get('HTTP_CONNECTION', '').lower()
+			if 'upgrade' in connection:
+				return self._handle_websocket()
+		return super(WebSocketHandler, self).handle_one_response()
 
-		:return: Result of calling the application if not a websocket Upgrade. Otherwise None.
-		"""
-		# In case the client doesn't want to initialize a WebSocket connection
-		# we will proceed with the default PyWSGI functionality.
-		if ('upgrade' not in self.environ.get("HTTP_CONNECTION",'').lower()
-			or self.environ.get("HTTP_UPGRADE", '').lower() != "WebSocket".lower()
-			or not self.accept_upgrade()):
-			return super(WebSocketHandler, self).handle_one_response()
+	def pre_start(self):
+		pass
 
-		self.time_start = time.time()
-		self.websocket_connection = True
-		self.headers_sent = False
-
-		# Detect the Websocket protocol
-		if 'HTTP_SEC_WEBSOCKET_VERSION' in self.environ:
-			version = int(self.environ['HTTP_SEC_WEBSOCKET_VERSION'])
-		elif "HTTP_SEC_WEBSOCKET_KEY1" in self.environ or 'HTTP_SEC_WEBSOCKET_KEY' in self.environ:
-			version = 76
-		else:
-			version = 75
-
-		self.websocket = ws.__dict__['WebSocket' + str(version)](self.socket, self.rfile, self.environ)
-		self.environ['wsgi.websocket'] = self.websocket
-
-		protocol = "ws://"
-		if self.environ.get( 'HTTP_X_FORWARDED_PROTOCOL', None ) == 'ssl' or self.environ.get( 'SERVER_PORT' ) == 443:
-			protocol = "wss://"
-
-		if version in (7,8,13):
-			sec_accept = self.environ['HTTP_SEC_WEBSOCKET_KEY'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
-			sec_accept = sha1( sec_accept ).digest().encode( 'base64' )
-			sec_accept = sec_accept[0:-1] # base64 sticks an extra \n on there, which really screws us up
-			headers = [
-				("Upgrade", "WebSocket"),
-				("Connection", "Upgrade"),
-				("Sec-WebSocket-Accept", sec_accept) ]
-			self.start_response( '101 Switching Protocols', headers )
-		elif version == 75:
-			headers = [
-				("Upgrade", "WebSocket"),
-				("Connection", "Upgrade"),
-				("WebSocket-Origin", self.websocket.origin),
-				("WebSocket-Protocol", self.websocket.protocol),
-				("WebSocket-Location", protocol + self.environ.get('HTTP_HOST') + self.websocket.path),
-			]
-			self.start_response("101 Web Socket Protocol Handshake", headers)
-		elif version == 76:
-			challenge = self._get_challenge()
-			headers = [
-				("Upgrade", "WebSocket"),
-				("Connection", "Upgrade"),
-				("Sec-WebSocket-Origin", self.websocket.origin),
-				("Sec-WebSocket-Protocol", self.websocket.protocol),
-				("Sec-WebSocket-Location", protocol + self.environ.get('HTTP_HOST') + self.websocket.path),
-			]
-
-			self.start_response("101 Web Socket Protocol Handshake", headers)
-			self.write(challenge)
-		else:
-			raise Exception("Version not supported: %s" % version)
-
-		if call_wsgi_app:
-			def start_response(status, headers, exc_info=None):
-				if exc_info:
-					try:
-						raise exc_info[0], exc_info[1], exc_info[2]
-					finally:
-						# Avoid dangling circular ref
-						exc_info = None
-				self.code = int(status.split(' ', 1)[0])
-				self.status = status
-				self.response_headers = [('-'.join([x.capitalize() for x in key.split('-')]), value) for key, value in headers]
-				self.response_headers_list = [x[0] for x in self.response_headers]
-				return None
+	def _fake_start_response(self, status, headers, exc_info=None ):
+		if exc_info:
 			try:
-				self.application(self.environ, start_response)
+				raise exc_info[0], exc_info[1], exc_info[2]
 			finally:
-				self.time_finish = time.time()
-				self.log_request()
+				# Avoid dangling circular ref
+				exc_info = None
+		self.code = int(status.split(' ', 1)[0])
+		self.status = status
+		self.response_headers = [('-'.join([x.capitalize() for x in key.split('-')]), value) for key, value in headers]
+		self.response_headers_list = [x[0] for x in self.response_headers]
+		return None
 
-		return
 
-	def accept_upgrade(self):
-		"""
-		Returns True if request is allowed to be upgraded.
-		If self.allowed_paths is non-empty, self.environ['PATH_INFO'] will
-		be matched against each of the regular expressions.
-		"""
+	def _handle_websocket(self):
+		environ = self.environ
 
-		if getattr( self, 'allowed_paths', None ): # May be missing, we get swizzled to.
-			path_info = self.environ.get('PATH_INFO', '')
+		try:
+			if environ.get("HTTP_SEC_WEBSOCKET_VERSION"):
+				self.close_connection = True
+				result = self._handle_hybi()
+			elif environ.get("HTTP_ORIGIN"):
+				self.close_connection = True
+				result = self._handle_hixie()
 
-			for regexps in self.allowed_paths:
-				return regexps.match(path_info)
+			self.result = []
+			if not result:
+				return
 
+			self.application(environ, self._fake_start_response)
+			return []
+		finally:
+			self.log_request()
+
+	def _handle_hybi(self):
+		environ = self.environ
+		version = environ.get("HTTP_SEC_WEBSOCKET_VERSION")
+
+		environ['wsgi.websocket_version'] = 'hybi-%s' % version
+
+		if version not in self.SUPPORTED_VERSIONS:
+			self.log_error('400: Unsupported Version: %r', version)
+			self.respond(
+				'400 Unsupported Version',
+				[('Sec-WebSocket-Version', '13, 8, 7')]
+			)
+			return
+
+		protocol, version = self.request_version.split("/")
+		key = environ.get("HTTP_SEC_WEBSOCKET_KEY")
+
+		# check client handshake for validity
+		if not environ.get("REQUEST_METHOD") == "GET":
+			# 5.2.1 (1)
+			self.respond('400 Bad Request')
+			return
+		elif not protocol == "HTTP":
+			# 5.2.1 (1)
+			self.respond('400 Bad Request')
+			return
+		elif float(version) < 1.1:
+			# 5.2.1 (1)
+			self.respond('400 Bad Request')
+			return
+		# XXX: nobody seems to set SERVER_NAME correctly. check the spec
+		#elif not environ.get("HTTP_HOST") == environ.get("SERVER_NAME"):
+			# 5.2.1 (2)
+			#self.respond('400 Bad Request')
+			#return
+		elif not key:
+			# 5.2.1 (3)
+			self.log_error('400: HTTP_SEC_WEBSOCKET_KEY is missing from request')
+			self.respond('400 Bad Request')
+			return
+		elif len(base64.b64decode(key)) != 16:
+			# 5.2.1 (3)
+			self.log_error('400: Invalid key: %r', key)
+			self.respond('400 Bad Request')
+			return
+
+		self.websocket = WebSocketHybi(self.socket, environ)
+		environ['wsgi.websocket'] = self.websocket
+
+		headers = [
+			("Upgrade", "websocket"),
+			("Connection", "Upgrade"),
+			("Sec-WebSocket-Accept", base64.b64encode(sha1(key + self.GUID).digest())),
+		]
+		self._send_reply("101 Switching Protocols", headers)
 		return True
 
-	def write(self, data):
-		if self.websocket_connection:
-			self.socket.sendall(data)
+	def _handle_hixie(self):
+		environ = self.environ
+		assert "upgrade" in self.environ.get("HTTP_CONNECTION", "").lower()
+
+		self.websocket = WebSocketHixie(self.socket, environ)
+		environ['wsgi.websocket'] = self.websocket
+
+		key1 = self.environ.get('HTTP_SEC_WEBSOCKET_KEY1')
+		key2 = self.environ.get('HTTP_SEC_WEBSOCKET_KEY2')
+
+		if key1 is not None:
+			environ['wsgi.websocket_version'] = 'hixie-76'
+			if not key1:
+				self.log_error("400: SEC-WEBSOCKET-KEY1 header is empty")
+				self.respond('400 Bad Request')
+				return
+			if not key2:
+				self.log_error("400: SEC-WEBSOCKET-KEY2 header is missing or empty")
+				self.respond('400 Bad Request')
+				return
+
+			part1 = self._get_key_value(key1)
+			part2 = self._get_key_value(key2)
+			if part1 is None or part2 is None:
+				self.respond('400 Bad Request')
+				return
+
+			headers = [
+				("Upgrade", "WebSocket"),
+				("Connection", "Upgrade"),
+				("Sec-WebSocket-Location", reconstruct_url(environ)),
+			]
+			if self.websocket.protocol is not None:
+				headers.append(("Sec-WebSocket-Protocol", self.websocket.protocol))
+			if self.websocket.origin:
+				headers.append(("Sec-WebSocket-Origin", self.websocket.origin))
+
+			self._send_reply("101 Web Socket Protocol Handshake", headers)
+
+			# This request should have 8 bytes of data in the body
+			key3 = self.rfile.read(8)
+
+			challenge = md5(struct.pack("!II", part1, part2) + key3).digest()
+
+			self.socket.sendall(challenge)
+			return True
 		else:
-			super(WebSocketHandler, self).write(data)
+			environ['wsgi.websocket_version'] = 'hixie-75'
+			headers = [
+				("Upgrade", "WebSocket"),
+				("Connection", "Upgrade"),
+				("WebSocket-Location", reconstruct_url(environ)),
+			]
 
-	def start_response(self, status, headers, exc_info=None):
-		if self.websocket_connection and not self.headers_sent:
-			self.status = status
+			if self.websocket.protocol is not None:
+				headers.append(("WebSocket-Protocol", self.websocket.protocol))
+			if self.websocket.origin:
+				headers.append(("WebSocket-Origin", self.websocket.origin))
 
-			towrite = []
-			towrite.append('%s %s\r\n' % (self.request_version, self.status))
+			self._send_reply("101 Web Socket Protocol Handshake", headers)
 
-			for header in headers:
-				towrite.append("%s: %s\r\n" % header)
+	def _send_reply(self, status, headers):
+		self.status = status
 
-			towrite.append("\r\n")
-			msg = ''.join(towrite)
-			self.socket.sendall(msg)
-			self.headers_sent = True
-			return self.write
+		towrite = []
+		towrite.append('%s %s\r\n' % (self.request_version, self.status))
 
-		return super(WebSocketHandler, self).start_response(status, headers, exc_info)
+		for header in headers:
+			towrite.append("%s: %s\r\n" % header)
+
+		towrite.append("\r\n")
+		msg = ''.join(towrite)
+		self.socket.sendall(msg)
+		self.headers_sent = True
+
+	def respond(self, status, headers=[]):
+		self.close_connection = True
+		self._send_reply(status, headers)
+
+		if self.socket is not None:
+			try:
+				self.socket._sock.close()
+				self.socket.close()
+			except socket_error:
+				pass
 
 	def _get_key_value(self, key_value):
 		key_number = int(re.sub("\\D", "", key_value))
 		spaces = re.subn(" ", "", key_value)[1]
 
 		if key_number % spaces != 0:
-			raise HandShakeError("key_number %d is not an intergral multiple of"
-								 " spaces %d" % (key_number, spaces))
+			self.log_error("key_number %d is not an intergral multiple of spaces %d", key_number, spaces)
+		else:
+			return key_number / spaces
 
-		return key_number / spaces
 
-	def _get_challenge(self):
-		key1 = self.environ.get('HTTP_SEC_WEBSOCKET_KEY1')
-		key2 = self.environ.get('HTTP_SEC_WEBSOCKET_KEY2')
+def reconstruct_url(environ):
+	secure = environ['wsgi.url_scheme'] == 'https'
+	if secure:
+		url = 'wss://'
+	else:
+		url = 'ws://'
 
-		if not (key1 and key2):
-			message = "Client using old/invalid protocol implementation"
-			headers = [("Content-Length", str(len(message))),]
-			self.start_response("400 Bad Request", headers)
-			self.write(message)
-			self.close_connection = True
-			return
+	if environ.get('HTTP_HOST'):
+		url += environ['HTTP_HOST']
+	else:
+		url += environ['SERVER_NAME']
 
-		part1 = self._get_key_value(self.environ['HTTP_SEC_WEBSOCKET_KEY1'])
-		part2 = self._get_key_value(self.environ['HTTP_SEC_WEBSOCKET_KEY2'])
+		if secure:
+			if environ['SERVER_PORT'] != '443':
+				url += ':' + environ['SERVER_PORT']
+		else:
+			if environ['SERVER_PORT'] != '80':
+				url += ':' + environ['SERVER_PORT']
 
-		# This request should have 8 bytes of data in the body
-		key3 = self.rfile.read(8)
+	url += quote(environ.get('SCRIPT_NAME', ''))
+	url += quote(environ.get('PATH_INFO', ''))
 
-		challenge = ""
-		challenge += struct.pack("!I", part1)
-		challenge += struct.pack("!I", part2)
-		challenge += key3
+	if environ.get('QUERY_STRING'):
+		url += '?' + environ['QUERY_STRING']
 
-		return md5(challenge).digest()
-
-	def wait(self):
-		return self.websocket.wait()
-
-	def send(self, message):
-		return self.websocket.send(message)
+	return url
