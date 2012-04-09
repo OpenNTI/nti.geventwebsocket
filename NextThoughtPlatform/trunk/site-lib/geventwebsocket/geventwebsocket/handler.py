@@ -61,6 +61,11 @@ class WebSocketHandler(WSGIHandler):
 			self.application(environ, self._fake_start_response)
 			return []
 		finally:
+			if not hasattr( self, 'response_headers' ):
+				self.response_headers = []
+				self.response_headers_list = []
+				self.status = '500'
+				self.code = 500
 			self.log_request()
 
 	def _handle_hybi(self):
