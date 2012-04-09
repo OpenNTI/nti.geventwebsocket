@@ -6,6 +6,7 @@ if sys.version_info[:2] == (2, 7):
 	# use it.
 	# Python 2.6's BufferedReader is broken (TypeError: recv_into() argument
 	# 1 must be pinned buffer, not bytearray).
+	import socket
 	from io import BufferedReader, RawIOBase
 
 	class SocketIO(RawIOBase):
@@ -18,8 +19,8 @@ if sys.version_info[:2] == (2, 7):
 			while True:
 				try:
 					return self._sock.recv_into(b)
-				except socket_error as ex:
-					if ex.args[0] == EINTR:
+				except socket.error as ex:
+					if ex.args[0] == socket.EINTR:
 						continue
 					raise
 
