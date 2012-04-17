@@ -8,6 +8,23 @@ from urllib import quote
 from gevent.pywsgi import WSGIHandler
 from geventwebsocket.websocket import WebSocketHybi, WebSocketHixie
 
+from zope import component
+from zope import interface
+from . import interfaces
+
+class WSWillUpgradeEvent(object):
+	interface.implements( interfaces.IWSWillUpgradeEvent )
+
+	def __init__( self, environ ):
+		self.environ = environ
+
+
+def can_upgrade(environ):
+	"""
+	:return: A boolean indicating whether we can upgrade to websockets.
+	"""
+	event = WSWillUpgradeEvent(environ)
+	return all( [x.can_upgrade(event) for x in component.subscribers( (event,), interfaces.IWSWillUpgradeVeto )] )
 
 class WebSocketHandler(WSGIHandler):
 	""" Automatically upgrades the connection to websockets. """
@@ -20,10 +37,10 @@ class WebSocketHandler(WSGIHandler):
 		environ = self.environ
 		upgrade = environ.get('HTTP_UPGRADE', '').lower()
 
-		if upgrade == 'websocket':
-			connection = environ.get('HTTP_CONNECTION', '').lower()
-			if 'upgrade' in connection:
-				return self._handle_websocket()
+		if upgrade == 'websocket' \
+		  and 'upgrade' in environ.get('HTTP_CONNECTION', '').lower() \
+		  and can_upgrade(environ):
+			return self._handle_websocket()
 		return super(WebSocketHandler, self).handle_one_response()
 
 	def pre_start(self):
