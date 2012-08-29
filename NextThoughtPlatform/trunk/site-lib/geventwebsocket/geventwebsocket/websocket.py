@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+logger = __import__('logging').getLogger(__name__)
+
 import struct
 
 from geventwebsocket.python_fixes import makefile, is_closed
@@ -358,6 +360,7 @@ class WebSocketHybi(WebSocket):
 	def close(self, code=1000, message=''):
 		"""Close the websocket, sending the specified code and message"""
 		if self.socket is not None:
+			logger.debug( "Closing websocket with code %s and message %s", code, message )
 			message = self._encode_text(message)
 			self.send_frame(struct.pack('!H%ds' % len(message), code, message), opcode=self.OPCODE_CLOSE)
 			self._close()
