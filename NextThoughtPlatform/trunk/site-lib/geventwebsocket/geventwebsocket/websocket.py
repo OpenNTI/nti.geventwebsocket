@@ -32,7 +32,7 @@ class WebSocketHixie(WebSocket):
 	def send(self, message):
 		message = self._encode_text(message)
 
-		self._write("\x00" + message + "\xFF")
+		self._write( b"\x00" + message + b"\xFF")
 
 	def close(self):
 		if self.fobj is not None:
@@ -71,12 +71,19 @@ class WebSocketHixie(WebSocket):
 				raise WebSocketError('Connection closed unexpectedly while reading message: %r' % msg)
 
 			byte = read(1)
-			if ord(byte) != 0xff:
-				bytes.append(byte)
-			else:
+			if not byte or ord(byte) == 0xFF:
+				# In the ancient hixie protocol (section 6)
+				# closure by either party is allowed at any time, although clients are discouraged
+				# from doing so. closure also does not have to be clean. so an EOF
+				# (empty string) from the client is not exactly an error condition. (The earlier
+				# check shows though, that we, the server, don't expect to close the socket.)
+				# The 0xFF is the expected end-frame
 				break
 
-		return ''.join(bytes)
+			bytes.append(byte)
+
+
+		return b''.join(bytes)
 
 	def receive(self):
 		read = self.fobj.read
@@ -87,21 +94,22 @@ class WebSocketHixie(WebSocket):
 			if not frame_str:
 				self.close()
 				return
-			else:
-				frame_type = ord(frame_str)
+
+			frame_type = ord(frame_str)
 
 			if frame_type == 0x00:
 				bytes = self._read_until()
 				return bytes.decode("utf-8", "replace")
-			elif frame_type == 0xFF: # Client-initiated close
+
+			if frame_type == 0xFF: # Client-initiated close
 				try:
-					self._write( '\0xFF\x00' )
+					self._write( b'\0xFF\x00' )
 				except IOError:
 					pass
 				self.close()
 				return None
-			else:
-				raise WebSocketError("Received an invalid frame_type=%r" % frame_type)
+
+			raise WebSocketError("Received an invalid frame_type=%r" % frame_type)
 
 
 class WebSocketHybi(WebSocket):
