@@ -1,0 +1,3 @@
+- Standalone unit tests
+- tox.ini to test supported python versions
+
