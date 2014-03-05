@@ -8,6 +8,11 @@ entry_points = {
 
 }
 
+import platform
+py_impl = getattr(platform, 'python_implementation', lambda: None)
+IS_PYPY = py_impl() == 'PyPy'
+
+
 setup(
     name = 'nti.geventwebsocket',
     version = VERSION,
@@ -32,8 +37,8 @@ setup(
 	package_dir={'': 'src'},
 	install_requires=[
 		'setuptools',
-		'gevent',
-		'greenlet',
+		'gevent' if not IS_PYPY else '',
+		'greenlet' if not IS_PYPY else '',
 		'zope.interface'
 	],
 	setup_requires = [
