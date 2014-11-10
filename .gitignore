@@ -21,3 +21,4 @@ build
 .*.sw[nop]
 cover
 *.egg
+.eggs
