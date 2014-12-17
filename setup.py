@@ -1,17 +1,15 @@
 #!/usr/bin/env python
-from setuptools import setup, find_packages
 import codecs
-
-VERSION = '0.0.1'
-
-entry_points = {
-
-}
+from setuptools import setup, find_packages
 
 import platform
 py_impl = getattr(platform, 'python_implementation', lambda: None)
 IS_PYPY = py_impl() == 'PyPy'
 
+VERSION = '0.1'
+
+entry_points = {
+}
 
 setup(
     name = 'nti.geventwebsocket',
@@ -37,15 +35,14 @@ setup(
 	package_dir={'': 'src'},
 	install_requires=[
 		'setuptools',
+		'zope.interface',
 		'gevent' if not IS_PYPY else '',
-		'greenlet' if not IS_PYPY else '',
-		'zope.interface'
+		'greenlet' if not IS_PYPY else ''
 	],
 	setup_requires = [
 		# Without this, we don't get data files in sdist,
 		# which in turn means tox can't work
 		'setuptools-git'
 	],
-#	namespace_packages=['nti'],
 	entry_points=entry_points
 )
