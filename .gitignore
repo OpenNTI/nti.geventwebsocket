@@ -22,3 +22,5 @@ build
 cover
 *.egg
 .eggs
+/.project
+/.pydevproject
