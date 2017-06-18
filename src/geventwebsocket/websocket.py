@@ -242,8 +242,7 @@ class WebSocketHybi(WebSocket):
 
 			if payload:
 				payload = bytearray(payload)
-
-				for i in xrange(len(payload)):
+				for i in range(len(payload)):
 					payload[i] = payload[i] ^ mask[i % 4]
 
 			return fin, opcode, payload
