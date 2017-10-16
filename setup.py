@@ -35,6 +35,7 @@ setup(
 	package_dir={'': 'src'},
 	install_requires=[
 		'setuptools',
+        'six',
 		'zope.interface',
 		'gevent' if not IS_PYPY else '',
 		'greenlet' if not IS_PYPY else ''
