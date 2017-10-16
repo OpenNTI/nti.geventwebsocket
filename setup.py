@@ -37,8 +37,8 @@ setup(
 		'setuptools',
         'six',
 		'zope.interface',
-		'gevent' if not IS_PYPY else '',
-		'greenlet' if not IS_PYPY else ''
+		'gevent',
+		'greenlet',
 	],
 	setup_requires = [
 		# Without this, we don't get data files in sdist,
