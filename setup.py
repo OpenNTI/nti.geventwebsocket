@@ -38,7 +38,6 @@ setup(
         'six',
 		'zope.interface',
 		'gevent',
-		'greenlet',
 	],
 	setup_requires = [
 		# Without this, we don't get data files in sdist,
