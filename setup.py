@@ -20,7 +20,7 @@ setup(
     long_description = codecs.open('README.rst', encoding='utf-8').read(),
     license = 'Apache',
     keywords = 'nose exceptions zope',
-    url = 'https://github.com/NextThought/nti.geventwebsocket',
+    url = 'https://github.com/OpenNTI/nti.geventwebsocket',
     classifiers = [
 		'Development Status :: 4 - Beta',
         'Intended Audience :: Developers',
